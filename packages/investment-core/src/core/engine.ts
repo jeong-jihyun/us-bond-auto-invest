@@ -34,8 +34,12 @@ export interface AppData {
   settings: { countryCode: string; currency: 'USD'; timezone: string; mfaEnabled: boolean };
 }
 
-let idSeq = 0;
-export const newId = (p: string) => `${p}-${Date.now().toString(36)}-${(idSeq++).toString(36)}`;
+/** UUID v4 (DB uuid 컬럼과 호환). 접두어 인자는 호출부 호환용으로만 남긴다. */
+export const newId = (_prefix?: string) =>
+  'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
 const stamp = (date: string, hm = '09:00') => `${date}T${hm}:00`;
 
 export function planCash(data: AppData, planId: string) {

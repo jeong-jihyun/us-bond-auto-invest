@@ -2,12 +2,14 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  AppData, audit, initialNextDate, newId, nextDueDate, planCash, processCycle, runDuePlans, CycleResult,
-} from '../core/engine';
-import { initialMockBrokerState, MockScenario } from '../broker/mockBroker';
-import { etfByTicker } from '../core/etfs';
-import { D, money } from '../core/money';
-import { parseDate, scheduledDateFor } from '../core/calendar';
+  AppData, CycleResult, MockScenario, audit, emptyData, newId,
+  acceptConsents as aConsents, addPaperFunds as aFunds, cancelPlan as aCancel, connectBroker as aConnect,
+  createPlan as aCreate, disconnectBroker as aDisconnect, markRead as aRead, pausePlan as aPause, rerunLastMonth as aRerun,
+  resumePlan as aResume, runNextDue as aRunNext, setAutoInvest as aAuto, setScenario as aScenario, updatePlan as aUpdate,
+  updateSettings as aSettings,
+} from '@bond/investment-core';
+
+export { validateAmountDay, MONTHLY_LIMIT } from '@bond/investment-core';
 
 export type RouteName =
   | 'home' | 'etfs' | 'plans' | 'orders' | 'more'
@@ -16,94 +18,138 @@ export type RouteName =
 export type Route = { name: RouteName; params?: Record<string, any> };
 export const TABS: RouteName[] = ['home', 'etfs', 'plans', 'orders', 'more'];
 
-const todayKST = () => {
-  const d = new Date(Date.now() + 9 * 3600 * 1000);
-  return d.toISOString().slice(0, 10);
-};
+/** 서버 주소. 빌드할 때 EXPO_PUBLIC_API_URL 로 바꿀 수 있다 */
+export const API_BASE = (process.env.EXPO_PUBLIC_API_URL ?? 'https://us-bond-auto-invest-api.vercel.app/api/v1').replace(/\/$/, '');
 
-const emptyData = (): AppData => ({
-  user: null,
-  consents: [],
-  brokerConnection: null,
-  plans: [],
-  cycles: [],
-  ledger: [],
-  orders: [],
-  executions: [],
-  holdings: [],
-  dividends: [],
-  dividendMonths: [],
-  notifications: [],
-  audit: [],
-  today: todayKST(),
-  broker: null,
-  // 모의 환경 전용으로 켜 둔다. 실거래 플래그는 항상 false.
-  flags: { autoInvestEnabled: true, liveTradingEnabled: false },
-  settings: { countryCode: 'KR', currency: 'USD', timezone: 'Asia/Seoul', mfaEnabled: false },
-});
-
-export const MONTHLY_LIMIT = 10000;
-export const CONSENT_VERSION = '2026-11';
+/** server: 실제 서버(DB)에 저장 · local: 이 기기에만 저장하는 체험 모드 */
+export type Mode = 'server' | 'local';
 
 interface Store {
   data: AppData;
+  mode: Mode;
+  token: string | null;
   stack: Route[];
   tab: RouteName;
   toast: string | null;
+  busy: boolean;
   lastRun: CycleResult[] | null;
+  lastSync: string | null;
 
-  // navigation
   go: (name: RouteName, params?: Record<string, any>) => void;
   back: () => void;
   setTab: (t: RouteName) => void;
   showToast: (m: string) => void;
 
-  // auth
-  signIn: (email: string, mode: 'login' | 'signup') => string | null;
+  signIn: (email: string, password: string, kind: 'login' | 'signup', mode: Mode) => Promise<string | null>;
   signOut: () => void;
+  refresh: () => Promise<void>;
 
-  // broker & consents
-  connectBroker: () => void;
-  disconnectBroker: () => string | null;
-  acceptConsents: () => void;
-
-  // plans
-  createPlan: (i: { ticker: string; amount: string; day: number }) => string | null;
-  updatePlan: (id: string, i: { amount: string; day: number }) => string | null;
-  pausePlan: (id: string) => void;
-  resumePlan: (id: string) => void;
-  cancelPlan: (id: string) => void;
-
-  // simulation
+  connectBroker: () => Promise<string | null>;
+  disconnectBroker: () => Promise<string | null>;
+  acceptConsents: () => Promise<string | null>;
+  createPlan: (i: { ticker: string; amount: string; day: number }) => Promise<string | null>;
+  updatePlan: (id: string, i: { amount: string; day: number }) => Promise<string | null>;
+  pausePlan: (id: string) => Promise<string | null>;
+  resumePlan: (id: string) => Promise<string | null>;
+  cancelPlan: (id: string) => Promise<string | null>;
   runNextDue: () => Promise<void>;
   rerunLastMonth: (planId: string) => Promise<void>;
-  setScenario: (s: MockScenario) => void;
-  setAutoInvest: (v: boolean) => void;
-  addPaperFunds: () => void;
-
-  // misc
-  updateSettings: (p: Partial<AppData['settings']>) => void;
-  markRead: (id?: string) => void;
+  setScenario: (s: MockScenario) => Promise<string | null>;
+  setAutoInvest: (v: boolean) => Promise<string | null>;
+  addPaperFunds: () => Promise<string | null>;
+  updateSettings: (p: Partial<AppData['settings']>) => Promise<string | null>;
+  markRead: (id?: string) => Promise<string | null>;
   resetAll: () => void;
 }
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
+class ApiError extends Error {
+  constructor(message: string, public status: number) {
+    super(message);
+  }
+}
+
+async function api(path: string, opts: { method?: string; body?: unknown; token?: string | null } = {}) {
+  let res: Response;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 25000);
+    res = await fetch(`${API_BASE}${path}`, {
+      method: opts.method ?? 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
+      },
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+  } catch {
+    throw new ApiError('서버에 연결할 수 없습니다. 인터넷 연결을 확인하세요', 0);
+  }
+  const text = await res.text();
+  let json: any = {};
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    throw new ApiError(`서버 응답을 읽을 수 없습니다 (${res.status})`, res.status);
+  }
+  if (!res.ok) {
+    const msg = Array.isArray(json.message) ? json.message[0] : json.message;
+    throw new ApiError(msg ?? `오류 (${res.status})`, res.status);
+  }
+  return json;
+}
+
 export const useApp = create<Store>()(
   persist(
     (set, get) => {
-      const mutate = (fn: (d: AppData) => void) => {
+      /** 체험 모드: 기기 안에서 바로 바꾼다 */
+      const local = async (fn: (d: AppData) => unknown) => {
         const d = clone(get().data);
-        fn(d);
+        const r = await fn(d);
+        const err = typeof r === 'string' ? r : (r as any)?.error ?? null;
+        if (err) return err as string;
         set({ data: d });
+        return null;
+      };
+
+      /** 서버 모드: 서버가 DB에 저장하고 새 상태를 돌려준다. 실패하면 오류 문구(string) */
+      const remote = async (path: string, method = 'POST', body?: unknown): Promise<any> => {
+        if (get().busy) return '처리 중입니다. 잠시만 기다리세요';
+        set({ busy: true });
+        try {
+          const r = await api(path, { method, body, token: get().token });
+          if (r.state) set({ data: r.state, lastSync: new Date().toISOString() });
+          return r;
+        } catch (e: any) {
+          if (e instanceof ApiError && e.status === 401) {
+            set({ token: null, data: emptyData(), stack: [{ name: 'home' }], tab: 'home' });
+          }
+          return (e?.message as string) ?? '오류가 발생했습니다';
+        } finally {
+          set({ busy: false });
+        }
+      };
+
+      /** 같은 동작을 모드에 따라 서버 또는 기기에서 실행 */
+      const act = async (path: string, method: string, body: unknown, fn: (d: AppData) => unknown) => {
+        if (get().mode === 'local') return local(fn);
+        const r = await remote(path, method, body);
+        return typeof r === 'string' ? r : null;
       };
 
       return {
         data: emptyData(),
+        mode: 'server',
+        token: null,
         stack: [{ name: 'home' }],
         tab: 'home',
         toast: null,
+        busy: false,
         lastRun: null,
+        lastSync: null,
 
         go: (name, params) => {
           if (TABS.includes(name)) return set({ tab: name, stack: [{ name, params }] });
@@ -116,185 +162,109 @@ export const useApp = create<Store>()(
         setTab: (t) => set({ tab: t, stack: [{ name: t }] }),
         showToast: (m) => {
           set({ toast: m });
-          setTimeout(() => get().toast === m && set({ toast: null }), 2600);
+          setTimeout(() => get().toast === m && set({ toast: null }), 2800);
         },
 
-        signIn: (email, mode) => {
+        signIn: async (email, password, kind, mode) => {
           const e = email.trim().toLowerCase();
           if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) return '이메일 형식을 확인하세요';
-          const cur = get().data;
-          if (cur.user && cur.user.email === e) {
-            set({ stack: [{ name: 'home' }], tab: 'home' });
+          if (password.length < 8) return '비밀번호는 8자 이상';
+          if (mode === 'local') {
+            const cur = get().data;
+            if (get().mode === 'local' && cur.user?.email === e) {
+              set({ stack: [{ name: 'home' }], tab: 'home' });
+              return null;
+            }
+            const d = emptyData();
+            d.user = { id: newId('usr'), email: e, countryCode: 'KR', timezone: 'Asia/Seoul', status: 'ACTIVE', createdAt: d.today };
+            audit(d, kind === 'signup' ? 'USER_SIGNUP' : 'USER_LOGIN', 'users', e);
+            set({ mode: 'local', token: null, data: d, stack: [{ name: 'home' }], tab: 'home', lastRun: null });
             return null;
           }
-          // 다른 이메일이면 새 모의 계정으로 시작
-          const d = emptyData();
-          d.user = { id: newId('usr'), email: e, countryCode: 'KR', timezone: 'Asia/Seoul', status: 'ACTIVE', createdAt: d.today };
-          audit(d, mode === 'signup' ? 'USER_SIGNUP' : 'USER_LOGIN', 'users', e);
-          set({ data: d, stack: [{ name: 'home' }], tab: 'home' });
-          return null;
+          set({ busy: true });
+          try {
+            const r = await api(`/auth/${kind}`, { method: 'POST', body: { email: e, password } });
+            const s = await api('/state', { token: r.token });
+            set({ mode: 'server', token: r.token, data: s.state, stack: [{ name: 'home' }], tab: 'home', lastRun: null, lastSync: new Date().toISOString() });
+            return null;
+          } catch (err: any) {
+            return err?.message ?? '로그인하지 못했습니다';
+          } finally {
+            set({ busy: false });
+          }
         },
-        signOut: () => mutate((d) => { d.user = null; }),
+        signOut: () => set({ token: null, data: emptyData(), stack: [{ name: 'home' }], tab: 'home', lastRun: null }),
 
-        connectBroker: () => {
-          mutate((d) => {
-            const acct = `DU${Math.floor(1000000 + Math.random() * 8999999)}`;
-            d.brokerConnection = {
-              id: newId('bc'), brokerCode: 'IBKR', externalAccountId: acct, environment: 'PAPER',
-              connectionStatus: 'CONNECTED', createdAt: d.today,
-            };
-            if (!d.broker) d.broker = initialMockBrokerState(acct);
-            else d.broker.accountId = acct;
-            audit(d, 'BROKER_CONNECTED', 'broker_connections', `IBKR PAPER ${acct}`);
-          });
-          get().showToast('IBKR 모의(Paper) 계좌가 연결되었습니다');
+        /** 서버에서 최신 상태 받기 (매일 아침 자동 실행 결과 반영) */
+        refresh: async () => {
+          if (get().mode !== 'server' || !get().token || get().busy) return;
+          try {
+            const s = await api('/state', { token: get().token });
+            set({ data: s.state, lastSync: new Date().toISOString() });
+          } catch (e: any) {
+            if (e instanceof ApiError && e.status === 401) {
+              set({ token: null, data: emptyData() });
+              get().showToast('다시 로그인하세요');
+            }
+          }
         },
-        disconnectBroker: () => {
-          if (get().data.plans.some((p) => p.status === 'ACTIVE')) return '진행 중인 적립을 먼저 일시정지하거나 해지하세요';
-          mutate((d) => {
-            if (d.brokerConnection) d.brokerConnection.connectionStatus = 'DISCONNECTED';
-            audit(d, 'BROKER_DISCONNECTED', 'broker_connections', '');
-          });
-          return null;
-        },
-        acceptConsents: () =>
-          mutate((d) => {
-            d.consents = [
-              { consentType: 'RISK_DISCLOSURE', version: CONSENT_VERSION, acceptedAt: d.today },
-              { consentType: 'AUTO_ORDER', version: CONSENT_VERSION, acceptedAt: d.today },
-            ];
-            audit(d, 'CONSENT_ACCEPTED', 'user_consents', CONSENT_VERSION);
-          }),
 
-        createPlan: ({ ticker, amount, day }) => {
-          const d0 = get().data;
-          if (!d0.brokerConnection || d0.brokerConnection.connectionStatus !== 'CONNECTED') return '먼저 IBKR 계좌를 연결하세요';
-          if (d0.consents.length < 2) return '위험 고지와 자동주문 동의가 필요합니다';
-          const err = validateAmountDay(amount, day);
-          if (err) return err;
-          const etf = etfByTicker(ticker);
-          mutate((d) => {
-            const plan = {
-              id: newId('pln'), userId: d.user!.id, brokerConnectionId: d.brokerConnection!.id, etfId: etf.id, ticker,
-              monthlyAmount: money(amount), currency: 'USD' as const, frequency: 'MONTHLY' as const, scheduledDay: day,
-              orderUnit: 'WHOLE_SHARE' as const, orderType: 'LIMIT' as const, cashRollover: true, timezone: d.settings.timezone,
-              status: 'ACTIVE' as const, nextScheduledDate: initialNextDate(d.today, day), createdAt: d.today, updatedAt: d.today,
-            };
-            d.plans.unshift(plan);
-            audit(d, 'PLAN_CREATED', plan.id, `${ticker} $${plan.monthlyAmount} 매월 ${day}일`);
-            d.notifications.unshift({
-              id: newId('ntf'), type: 'INFO', title: `${ticker} 적립 시작`,
-              content: `매월 ${day}일 $${plan.monthlyAmount}. 첫 실행 ${plan.nextScheduledDate}`, createdAt: `${d.today}T09:00:00`, readAt: null,
-            });
-          });
-          return null;
+        connectBroker: async () => {
+          const err = await act('/broker/connections', 'POST', undefined, (d) => aConnect(d));
+          get().showToast(err ?? 'IBKR 모의(Paper) 계좌가 연결되었습니다');
+          return err;
         },
-        updatePlan: (id, { amount, day }) => {
-          const err = validateAmountDay(amount, day);
-          if (err) return err;
-          mutate((d) => {
-            const p = d.plans.find((x) => x.id === id)!;
-            const before = `$${p.monthlyAmount} ${p.scheduledDay}일`;
-            p.monthlyAmount = money(amount);
-            if (p.scheduledDay !== day) {
-              p.scheduledDay = day;
-              // 이미 이번 달 사이클이 있으면 다음 달부터 새 날짜
-              if (p.nextScheduledDate) {
-                const { y, m } = parseDate(p.nextScheduledDate);
-                const cand = scheduledDateFor(y, m, day);
-                p.nextScheduledDate = cand >= d.today ? cand : initialNextDate(d.today, day);
-              }
-            }
-            p.updatedAt = d.today;
-            audit(d, 'PLAN_UPDATED', id, `${before} → $${p.monthlyAmount} ${day}일`);
-          });
-          return null;
-        },
-        pausePlan: (id) =>
-          mutate((d) => {
-            const p = d.plans.find((x) => x.id === id)!;
-            p.status = 'PAUSED';
-            audit(d, 'PLAN_PAUSED', id, p.ticker);
-          }),
-        resumePlan: (id) =>
-          mutate((d) => {
-            const p = d.plans.find((x) => x.id === id)!;
-            p.status = 'ACTIVE';
-            p.nextScheduledDate = initialNextDate(d.today, p.scheduledDay);
-            audit(d, 'PLAN_RESUMED', id, `다음 ${p.nextScheduledDate}`);
-          }),
-        cancelPlan: (id) =>
-          mutate((d) => {
-            const p = d.plans.find((x) => x.id === id)!;
-            const rest = planCash(d, id);
-            if (rest.gt(0)) {
-              d.ledger.push({
-                id: newId('led'), userId: p.userId, investmentPlanId: id, cycleId: null, transactionType: 'WITHDRAW_ON_CANCEL',
-                amount: money(rest.neg()), currency: 'USD', referenceId: 'CANCEL', createdAt: `${d.today}T09:00:00`,
-              });
-            }
-            p.status = 'CANCELLED';
-            p.nextScheduledDate = null;
-            audit(d, 'PLAN_CANCELLED', id, `잔액 $${rest.toFixed(2)} 반환`);
-          }),
+        disconnectBroker: () => act('/broker/connections/current', 'DELETE', undefined, (d) => aDisconnect(d)),
+        acceptConsents: () => act('/consents', 'POST', undefined, (d) => aConsents(d)),
+        createPlan: (i) =>
+          act('/investment-plans', 'POST', {
+            ticker: i.ticker, monthlyAmount: i.amount, scheduledDay: i.day, currency: 'USD', frequency: 'MONTHLY',
+            orderUnit: 'WHOLE_SHARE', orderType: 'LIMIT', cashRollover: true, timezone: get().data.settings.timezone,
+          }, (d) => aCreate(d, i)),
+        updatePlan: (id, i) => act(`/investment-plans/${id}`, 'PATCH', { monthlyAmount: i.amount, scheduledDay: i.day }, (d) => aUpdate(d, id, i)),
+        pausePlan: (id) => act(`/investment-plans/${id}/pause`, 'POST', undefined, (d) => aPause(d, id)),
+        resumePlan: (id) => act(`/investment-plans/${id}/resume`, 'POST', undefined, (d) => aResume(d, id)),
+        cancelPlan: (id) => act(`/investment-plans/${id}/cancel`, 'POST', undefined, (d) => aCancel(d, id)),
 
         runNextDue: async () => {
-          const d = clone(get().data);
-          const next = nextDueDate(d);
-          if (!next) return get().showToast('실행할 적립이 없습니다');
-          if (!d.flags.autoInvestEnabled) return get().showToast('설정에서 자동매수가 꺼져 있습니다');
-          if (next > d.today) d.today = next;
-          const results = await runDuePlans(d, d.today);
-          set({ data: d, lastRun: results });
+          if (get().mode === 'local') {
+            const d = clone(get().data);
+            const r = await aRunNext(d);
+            if (r.error) return get().showToast(r.error);
+            set({ data: d, lastRun: r.results });
+            return;
+          }
+          const r = await remote('/simulation/advance');
+          if (typeof r === 'string') return get().showToast(r);
+          set({ lastRun: r.result?.results ?? [] });
         },
         rerunLastMonth: async (planId) => {
-          const d = clone(get().data);
-          const plan = d.plans.find((p) => p.id === planId);
-          const last = d.cycles.find((c) => c.investmentPlanId === planId);
-          if (!plan || !last) return get().showToast('아직 실행된 달이 없습니다');
-          const r = await processCycle(d, plan, last.scheduledDate);
-          set({ data: d });
-          get().showToast(r.message);
-        },
-        setScenario: (s) => mutate((d) => { if (d.broker) d.broker.scenario = s; }),
-        setAutoInvest: (v) => mutate((d) => {
-          d.flags.autoInvestEnabled = v;
-          audit(d, 'FLAG_CHANGED', 'AUTO_INVEST_ENABLED', String(v));
-        }),
-        addPaperFunds: () => {
-          mutate((d) => {
-            if (d.broker) d.broker.availableFunds = D(d.broker.availableFunds).plus(1000).toFixed(2);
-            audit(d, 'PAPER_FUNDS_ADDED', 'broker', '+$1,000');
-          });
-          get().showToast('모의 계좌에 $1,000 추가');
-        },
-
-        updateSettings: (p) => mutate((d) => {
-          d.settings = { ...d.settings, ...p };
-          if (p.timezone || p.countryCode) {
-            if (d.user) { d.user.timezone = d.settings.timezone; d.user.countryCode = d.settings.countryCode; }
+          if (get().mode === 'local') {
+            const d = clone(get().data);
+            const r = await aRerun(d, planId);
+            if (r.error) return get().showToast(r.error);
+            set({ data: d });
+            return get().showToast(r.message);
           }
-          audit(d, 'SETTINGS_UPDATED', 'users', JSON.stringify(p));
-        }),
-        markRead: (id) => mutate((d) => {
-          d.notifications.forEach((n) => { if (!id || n.id === id) n.readAt = n.readAt ?? d.today; });
-        }),
-        resetAll: () => set({ data: emptyData(), stack: [{ name: 'home' }], tab: 'home', lastRun: null }),
+          const r = await remote(`/simulation/rerun/${planId}`);
+          get().showToast(typeof r === 'string' ? r : r.result?.message ?? '완료');
+        },
+        setScenario: (s) => act('/broker/scenario', 'PATCH', { scenario: s }, (d) => aScenario(d, s)),
+        setAutoInvest: (v) => act('/users/me', 'PATCH', { autoInvestEnabled: v }, (d) => aAuto(d, v)),
+        addPaperFunds: async () => {
+          const err = await act('/broker/paper-funds', 'POST', undefined, (d) => aFunds(d, 1000));
+          get().showToast(err ?? '모의 계좌에 $1,000 추가');
+          return err;
+        },
+        updateSettings: (p) => act('/users/me', 'PATCH', p, (d) => aSettings(d, p)),
+        markRead: (id) => act('/notifications/read', 'POST', id ? { id } : {}, (d) => aRead(d, id)),
+        resetAll: () => set({ data: emptyData(), token: null, stack: [{ name: 'home' }], tab: 'home', lastRun: null }),
       };
     },
     {
-      name: 'us-bond-auto-invest-v1',
+      name: 'us-bond-auto-invest-v2',
       storage: createJSONStorage(() => AsyncStorage),
-      partialize: (s) => ({ data: s.data }),
+      partialize: (s) => ({ data: s.data, mode: s.mode, token: s.token, lastSync: s.lastSync }),
     },
   ),
 );
-
-export function validateAmountDay(amount: string, day: number) {
-  if (!/^\d+(\.\d{1,2})?$/.test(amount.trim())) return '금액은 숫자로, 소수 둘째 자리까지 입력하세요';
-  const a = D(amount);
-  if (a.lt(1)) return '월 적립금은 $1 이상이어야 합니다';
-  if (a.gt(MONTHLY_LIMIT)) return `월 한도는 $${MONTHLY_LIMIT.toLocaleString()} 입니다`;
-  if (!Number.isInteger(day) || day < 1 || day > 31) return '날짜는 1~31일 중에서 고르세요';
-  return null;
-}

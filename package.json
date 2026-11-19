@@ -1,0 +1,9 @@
+{
+  "name": "us-bond-auto-invest",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "test": "npm -w @bond/investment-core test && npm -w @bond/api test",
+    "typecheck": "npm -w @bond/investment-core run typecheck && npm -w @bond/api run typecheck && npm -w mobile run typecheck"
+  }
+}

@@ -77,7 +77,7 @@ export class MockBrokerAdapter implements BrokerAdapter {
     const existing = Object.values(this.state.orders).find((o) => o.idempotencyKey === input.idempotencyKey);
     if (existing) return { brokerOrderId: existing.brokerOrderId, status: existing.status };
 
-    const id = `MOCK-${++this.state.seq}`;
+    const id = `MOCK-${this.state.accountId}-${++this.state.seq}`;
     const order: MockOrder = {
       brokerOrderId: id,
       idempotencyKey: input.idempotencyKey,

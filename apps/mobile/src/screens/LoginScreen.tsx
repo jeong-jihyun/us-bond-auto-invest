@@ -1,6 +1,6 @@
 // M-001 로그인
 import React, { useState } from 'react';
-import { Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useApp } from '../store/useApp';
 import { Button, Card, Field, Icon, Segmented, T, Tip } from '../components/ui';
@@ -9,15 +9,16 @@ import { C, S } from '../theme';
 export default function LoginScreen() {
   const insets = useSafeAreaInsets();
   const signIn = useApp((s) => s.signIn);
-  const lastEmail = useApp((s) => s.data.user?.email);
-  const [mode, setMode] = useState<'login' | 'signup'>('login');
+  const busy = useApp((s) => s.busy);
+  const [kind, setKind] = useState<'login' | 'signup'>('signup');
+  const [local, setLocal] = useState(false);
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
   const [err, setErr] = useState<string | null>(null);
 
-  const submit = () => {
-    if (pw.length < 6) return setErr('비밀번호는 6자 이상');
-    setErr(signIn(email, mode));
+  const submit = async () => {
+    setErr(null);
+    setErr(await signIn(email, pw, kind, local ? 'local' : 'server'));
   };
 
   return (
@@ -31,13 +32,19 @@ export default function LoginScreen() {
       </View>
       <View style={{ padding: S.lg, marginTop: -18 }}>
         <Card>
-          <Segmented options={[{ label: '로그인', value: 'login' }, { label: '회원가입', value: 'signup' }]} value={mode} onChange={setMode} />
-          <Field label="이메일" value={email} onChange={setEmail} placeholder={lastEmail ?? 'you@example.com'} keyboard="email-address" />
-          <Field label="비밀번호" value={pw} onChange={setPw} placeholder="6자 이상" secure error={err} />
-          <Button title={mode === 'login' ? '로그인' : '가입하고 시작'} onPress={submit} />
+          <Segmented options={[{ label: '회원가입', value: 'signup' }, { label: '로그인', value: 'login' }]} value={kind} onChange={setKind} />
+          <Field label="이메일" value={email} onChange={setEmail} placeholder="you@example.com" keyboard="email-address" />
+          <Field label="비밀번호" value={pw} onChange={setPw} placeholder="8자 이상" secure error={err} />
+          <Button title={busy ? '연결 중…' : kind === 'login' ? '로그인' : '가입하고 시작'} onPress={submit} disabled={busy} />
+          <Pressable onPress={() => setLocal(!local)} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: S.md }}>
+            <Icon name={local ? 'checkbox' : 'square-outline'} color={local ? C.primary : C.faint} size={20} />
+            <Text style={T.sub}>서버 없이 체험 (이 기기에만 저장)</Text>
+          </Pressable>
         </Card>
         <Tip kind="warn" text="모의 환경입니다. 실제 돈과 실제 주문이 움직이지 않습니다." />
-        {lastEmail ? <Text style={[T.tiny, { textAlign: 'center' }]}>최근 계정: {lastEmail} (같은 이메일로 로그인하면 기록 유지)</Text> : null}
+        <Text style={[T.tiny, { textAlign: 'center' }]}>
+          {local ? '체험 모드: 기록이 이 기기에만 남습니다' : '서버 모드: 기록이 서버에 저장되고 매일 아침 자동 실행됩니다'}
+        </Text>
       </View>
     </View>
   );

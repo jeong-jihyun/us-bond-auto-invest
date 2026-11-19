@@ -4,11 +4,11 @@ import { Text, TextInput, View } from 'react-native';
 import Decimal from 'decimal.js';
 import { useApp } from '../store/useApp';
 import { Button, Card, Chip, Icon, KV, Row, Screen, Segmented, SectionTitle, T, Tip, st } from '../components/ui';
-import { CATEGORY_LABEL, ETF_SEED, RISK_LEVEL, etfByTicker } from '../core/etfs';
-import { mockQuote } from '../broker/mockBroker';
-import { calculateWholeShares } from '../core/calc';
-import { addDays } from '../core/calendar';
-import { pct, usd } from '../core/money';
+import { CATEGORY_LABEL, ETF_SEED, RISK_LEVEL, etfByTicker } from '@bond/investment-core';
+import { mockQuote } from '@bond/investment-core';
+import { calculateWholeShares } from '@bond/investment-core';
+import { addDays } from '@bond/investment-core';
+import { pct, usd } from '@bond/investment-core';
 import { C, S } from '../theme';
 
 const riskColor = (lv: number) => (lv === 1 ? [C.ok, C.okSoft] : lv === 2 ? [C.warn, C.warnSoft] : [C.danger, C.dangerSoft]);

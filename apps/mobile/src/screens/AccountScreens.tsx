@@ -3,9 +3,9 @@ import React, { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useApp } from '../store/useApp';
 import { Button, Card, Chip, Empty, Icon, IconName, KV, Row, Screen, Segmented, SectionTitle, T, Tip } from '../components/ui';
-import { planCash, portfolioSummary } from '../core/engine';
-import { fmtDate } from '../core/calendar';
-import { D, pct, sum, usd } from '../core/money';
+import { planCash, portfolioSummary } from '@bond/investment-core';
+import { fmtDate } from '@bond/investment-core';
+import { D, pct, sum, usd } from '@bond/investment-core';
 import { C, LEDGER_UI, S } from '../theme';
 
 export function BrokerScreen() {
@@ -54,7 +54,7 @@ export function BrokerScreen() {
             <Button small kind="ghost" icon="add" title="모의 계좌에 $1,000 넣기" onPress={addPaperFunds} />
           </Card>
           {err ? <Tip kind="danger" text={err} /> : null}
-          <Button kind="danger" title="연결 해제" icon="unlink" onPress={() => { const e = disconnectBroker(); setErr(e); if (!e) showToast('연결을 해제했습니다'); }} />
+          <Button kind="danger" title="연결 해제" icon="unlink" onPress={async () => { const e = await disconnectBroker(); setErr(e); if (!e) showToast('연결을 해제했습니다'); }} />
         </>
       ) : (
         <>

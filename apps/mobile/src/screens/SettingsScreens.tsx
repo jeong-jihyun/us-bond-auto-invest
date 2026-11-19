@@ -3,9 +3,9 @@ import React, { useState } from 'react';
 import { Pressable, Switch, Text, View } from 'react-native';
 import { useApp } from '../store/useApp';
 import { Button, Card, Chip, Help, Icon, KV, ListItem, Row, Screen, Segmented, SectionTitle, T, Tip } from '../components/ui';
-import { fmtDate } from '../core/calendar';
+import { fmtDate } from '@bond/investment-core';
 import { C, S } from '../theme';
-import { MockScenario } from '../broker/mockBroker';
+import { MockScenario } from '@bond/investment-core';
 
 const COUNTRIES = [
   { code: 'KR', label: '대한민국', tz: 'Asia/Seoul' },
@@ -49,16 +49,25 @@ export function SettingsScreen() {
   const [confirmReset, setConfirmReset] = useState(false);
   const [showAudit, setShowAudit] = useState(false);
   const scenario = data.broker?.scenario ?? 'NORMAL';
+  const mode = useApp((s) => s.mode);
+  const lastSync = useApp((s) => s.lastSync);
 
   return (
     <Screen title="설정" back>
+      <SectionTitle>저장 위치</SectionTitle>
+      <Card>
+        <KV k="모드" v={mode === 'server' ? '서버 (DB 저장)' : '체험 (이 기기만)'} />
+        {mode === 'server' ? <KV k="마지막 동기화" v={lastSync ? new Date(Date.parse(lastSync) + 9 * 3600e3).toISOString().slice(0, 16).replace('T', ' ') : '-'} /> : null}
+        <Text style={T.tiny}>{mode === 'server' ? '서버가 매일 07:00(한국)에 도래한 적립을 자동 실행합니다. 모의 시간 이동을 쓰면 그 계정은 자기 가상 날짜로만 움직입니다.' : '체험 모드는 서버 자동 실행이 없습니다.'}</Text>
+      </Card>
+
       <SectionTitle>국가 · 시간대</SectionTitle>
       <Card>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           {COUNTRIES.map((c) => {
             const on = data.settings.countryCode === c.code;
             return (
-              <Pressable key={c.code} onPress={() => { updateSettings({ countryCode: c.code, timezone: c.tz }); showToast(`${c.label} · ${c.tz}`); }}
+              <Pressable key={c.code} onPress={async () => showToast((await updateSettings({ countryCode: c.code, timezone: c.tz })) ?? `${c.label} · ${c.tz}`)}
                 style={{ paddingVertical: 8, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1.5, borderColor: on ? C.primary : C.line, backgroundColor: on ? C.primarySoft : C.white }}>
                 <Text style={{ fontWeight: '700', color: on ? C.primary : C.text }}>{c.label}</Text>
               </Pressable>
@@ -72,13 +81,13 @@ export function SettingsScreen() {
 
       <SectionTitle>보안</SectionTitle>
       <Card>
-        <KV k="2단계 인증 (MFA)" v={<Switch value={data.settings.mfaEnabled} onValueChange={(v) => updateSettings({ mfaEnabled: v })} />} />
+        <KV k="2단계 인증 (MFA)" v={<Switch value={data.settings.mfaEnabled} onValueChange={(v) => { updateSettings({ mfaEnabled: v }); }} />} />
         <KV k="계좌 비밀번호 저장" v="저장 안 함" />
       </Card>
 
       <SectionTitle>거래 스위치</SectionTitle>
       <Card>
-        <KV k="AUTO_INVEST_ENABLED (모의)" v={<Switch value={data.flags.autoInvestEnabled} onValueChange={setAutoInvest} />} />
+        <KV k="AUTO_INVEST_ENABLED (모의)" v={<Switch value={data.flags.autoInvestEnabled} onValueChange={(v) => { setAutoInvest(v); }} />} />
         <KV k="LIVE_TRADING_ENABLED" v={<Row style={{ gap: 4 }}><Icon name="lock-closed" size={14} color={C.faint} /><Text style={T.sub}>false</Text></Row>} />
         <KV k="BROKER · IBKR_ENV" v="IBKR · PAPER(모의)" />
       </Card>
@@ -89,7 +98,7 @@ export function SettingsScreen() {
         <Segmented<MockScenario>
           options={[{ label: '정상', value: 'NORMAL' }, { label: '부분체결', value: 'PARTIAL_FILL' }, { label: '거부', value: 'REJECT' }, { label: '잔액부족', value: 'LOW_FUNDS' }]}
           value={scenario}
-          onChange={(v) => { setScenario(v); showToast('다음 실행부터 적용'); }}
+          onChange={async (v) => showToast((await setScenario(v)) ?? '다음 실행부터 적용')}
         />
         {!data.broker ? <Text style={T.tiny}>계좌 연결 후 사용할 수 있습니다.</Text> : null}
         <KV k="가상 오늘 날짜" v={fmtDate(data.today)} />
@@ -111,8 +120,10 @@ export function SettingsScreen() {
 
       <View style={{ gap: S.sm, marginTop: S.md }}>
         <Button kind="ghost" title="로그아웃" icon="log-out-outline" onPress={signOut} />
-        <Button kind="danger" icon="trash-outline" title={confirmReset ? '한 번 더 누르면 모든 모의 데이터 삭제' : '모의 데이터 초기화'}
-          onPress={() => { if (!confirmReset) return setConfirmReset(true); resetAll(); }} />
+        {mode === 'local' ? (
+          <Button kind="danger" icon="trash-outline" title={confirmReset ? '한 번 더 누르면 이 기기의 체험 데이터 삭제' : '체험 데이터 초기화'}
+            onPress={() => { if (!confirmReset) return setConfirmReset(true); resetAll(); }} />
+        ) : null}
       </View>
     </Screen>
   );

@@ -4,19 +4,37 @@ on:
     branches: [main]
   pull_request:
 jobs:
-  mobile:
+  test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/mobile
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: bond_auto
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bond_auto
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bond_auto
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: apps/mobile/package-lock.json
       - run: npm ci
-      - run: npx tsc --noEmit
-      - run: npx jest
-      - run: npx expo export --platform web
+      - name: 타입 검사
+        run: npm run typecheck
+      - name: 마이그레이션
+        run: npm -w @bond/api run migrate
+      - name: 엔진 단위 테스트
+        run: npm -w @bond/investment-core test
+      - name: API 통합 테스트 (실제 Postgres)
+        run: npm -w @bond/api test
+      - name: API 번들
+        run: npm -w @bond/api run build
+      - name: 모바일 웹 빌드
+        working-directory: apps/mobile
+        run: npx expo export --platform web

@@ -4,12 +4,12 @@ import { Pressable, Text, View } from 'react-native';
 import Decimal from 'decimal.js';
 import { useApp, validateAmountDay } from '../store/useApp';
 import { Button, Card, Chip, Empty, Field, Help, Icon, KV, Row, Screen, SectionTitle, T, Tip } from '../components/ui';
-import { ETF_SEED, RISK_LEVEL } from '../core/etfs';
-import { mockQuote } from '../broker/mockBroker';
-import { sizeOrder } from '../core/calc';
-import { firstScheduledDate, fmtDate, nextTradingDay } from '../core/calendar';
-import { planCash } from '../core/engine';
-import { roundUpToTick, usd } from '../core/money';
+import { ETF_SEED, RISK_LEVEL } from '@bond/investment-core';
+import { mockQuote } from '@bond/investment-core';
+import { sizeOrder } from '@bond/investment-core';
+import { firstScheduledDate, fmtDate, nextTradingDay } from '@bond/investment-core';
+import { planCash } from '@bond/investment-core';
+import { roundUpToTick, usd } from '@bond/investment-core';
 import { C, CYCLE_STATUS_UI, S } from '../theme';
 
 const DAYS = [1, 5, 10, 15, 20, 25, 28, 31];
@@ -34,12 +34,15 @@ export function PlanFormScreen({ ticker: initTicker, planId }: { ticker?: string
   const preview = !amountErr ? sizeOrder(amount, limit) : null;
   const dup = !editing && data.plans.some((p) => p.ticker === ticker && p.status !== 'CANCELLED');
 
-  const submit = () => {
+  const busy = useApp((s) => s.busy);
+  const submit = async () => {
+    setErr(null);
     if (!editing && !consented) {
       if (!agreeRisk || !agreeAuto) return setErr('두 가지 동의가 모두 필요합니다');
-      acceptConsents();
+      const ce = await acceptConsents();
+      if (ce) return setErr(ce);
     }
-    const e = editing ? updatePlan(editing.id, { amount, day }) : createPlan({ ticker, amount, day });
+    const e = editing ? await updatePlan(editing.id, { amount, day }) : await createPlan({ ticker, amount, day });
     if (e) return setErr(e);
     showToast(editing ? '적립 설정을 바꿨습니다' : `${ticker} 적립을 시작했습니다`);
     editing ? back() : go('plans');
@@ -130,7 +133,7 @@ export function PlanFormScreen({ ticker: initTicker, planId }: { ticker?: string
         title={editing ? '저장' : '적립 시작'}
         icon={editing ? 'save' : 'rocket'}
         onPress={submit}
-        disabled={!connected || !!amountErr || dup || (!editing && !consented && (!agreeRisk || !agreeAuto))}
+        disabled={busy || !connected || !!amountErr || dup || (!editing && !consented && (!agreeRisk || !agreeAuto))}
       />
     </Screen>
   );
@@ -205,15 +208,15 @@ export function PlanDetailScreen({ planId }: { planId: string }) {
             <View style={{ flex: 1 }}><Button kind="ghost" title="수정" icon="create-outline" onPress={() => go('planForm', { planId: p.id })} /></View>
             <View style={{ flex: 1 }}>
               {p.status === 'ACTIVE'
-                ? <Button kind="ghost" title="일시정지" icon="pause" onPress={() => { pausePlan(p.id); showToast('일시정지했습니다'); }} />
-                : <Button title="재개" icon="play" onPress={() => { resumePlan(p.id); showToast('다시 시작합니다'); }} />}
+                ? <Button kind="ghost" title="일시정지" icon="pause" onPress={async () => showToast((await pausePlan(p.id)) ?? '일시정지했습니다')} />
+                : <Button title="재개" icon="play" onPress={async () => showToast((await resumePlan(p.id)) ?? '다시 시작합니다')} />}
             </View>
           </Row>
           <Button
             kind="danger"
             icon="close-circle"
             title={confirmCancel ? `한 번 더 누르면 해지 (대기 현금 ${usd(cash)} 반환)` : '해지'}
-            onPress={() => { if (!confirmCancel) return setConfirmCancel(true); cancelPlan(p.id); showToast('해지했습니다'); }}
+            onPress={async () => { if (!confirmCancel) return setConfirmCancel(true); showToast((await cancelPlan(p.id)) ?? '해지했습니다'); }}
           />
         </View>
       ) : <Tip text="해지된 적립입니다. 기록은 그대로 남습니다." />}

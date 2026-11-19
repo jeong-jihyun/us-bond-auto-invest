@@ -4,8 +4,8 @@ import { Text, View } from 'react-native';
 import Decimal from 'decimal.js';
 import { useApp } from '../store/useApp';
 import { Card, Empty, KV, OrderBadge, Row, Screen, Segmented, SectionTitle, T, Tip } from '../components/ui';
-import { fmtDate } from '../core/calendar';
-import { usd } from '../core/money';
+import { fmtDate } from '@bond/investment-core';
+import { usd } from '@bond/investment-core';
 import { S } from '../theme';
 
 type F = 'ALL' | 'OPEN' | 'FILLED' | 'FAIL';

@@ -3,9 +3,9 @@ import React, { useState } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { useApp } from '../store/useApp';
 import { Button, Card, Chip, Icon, IconName, KV, Row, Screen, SectionTitle, T, Tip } from '../components/ui';
-import { nextDueDate, portfolioSummary } from '../core/engine';
-import { diffDays, fmtDate, nextTradingDay } from '../core/calendar';
-import { pct, usd } from '../core/money';
+import { nextDueDate, portfolioSummary } from '@bond/investment-core';
+import { diffDays, fmtDate, nextTradingDay } from '@bond/investment-core';
+import { pct, usd } from '@bond/investment-core';
 import { C, CYCLE_STATUS_UI, S } from '../theme';
 
 export default function HomeScreen() {
