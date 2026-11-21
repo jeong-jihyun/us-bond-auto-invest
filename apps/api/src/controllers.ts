@@ -39,10 +39,20 @@ const publicUser = (d: AppData) => ({
 
 @Controller('health')
 export class HealthController {
+  /** DB가 꺼져 있으면 503과 함께 db: 'down' 을 돌려준다 (모니터링용) */
   @Get()
-  async health() {
-    const [r] = await db().unsafe(`SELECT count(*)::int AS etfs FROM bond.etf_products`);
-    return { ok: true, etfs: r.etfs, autoInvestEnabled: config.autoInvestEnabled, liveTradingEnabled: false, broker: config.brokerProvider };
+  async health(@Req() req: any) {
+    const base = { autoInvestEnabled: config.autoInvestEnabled, liveTradingEnabled: false, broker: config.brokerProvider };
+    try {
+      const [r] = await db().unsafe(`SELECT count(*)::int AS etfs FROM bond.etf_products`);
+      const [j] = await db().unsafe(`SELECT run_date::text AS run_date, finished_at IS NOT NULL AS finished, cycles_created, errors
+                                       FROM bond.job_runs ORDER BY started_at DESC LIMIT 1`);
+      return { ok: true, db: 'up', etfs: r.etfs, lastJob: j ?? null, ...base };
+    } catch (e: any) {
+      console.error('[health]', e?.code ?? '', e?.message ?? e);
+      req.res.status(503);
+      return { ok: false, db: 'down', ...base };
+    }
   }
 }
 

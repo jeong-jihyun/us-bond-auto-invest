@@ -207,3 +207,29 @@ describe('스케줄러 (monthly-plan-scan)', () => {
     await reconcile(u.auth);
   });
 });
+
+describe('오류 안내', () => {
+  it('health는 DB 상태와 마지막 자동 실행을 알려 준다', async () => {
+    const r = await request(http).get('/api/v1/health').expect(200);
+    expect(r.body.db).toBe('up');
+    expect(r.body).toHaveProperty('lastJob');
+  });
+
+  it('DB 연결 오류는 503 + 한국어 문구', () => {
+    const { FriendlyErrorFilter, isDbDown } = require('../src/errors');
+    expect(isDbDown({ code: 'XX000', message: 'tenant/user x not found' })).toBe(true);
+    expect(isDbDown({ code: 'ENOTFOUND' })).toBe(true);
+    expect(isDbDown(new Error('boom'))).toBe(false);
+    let status = 0; let body: any = null;
+    const res = { status: (s: number) => { status = s; return { json: (b: any) => { body = b; } }; } };
+    const host: any = { switchToHttp: () => ({ getResponse: () => res }) };
+    const origErr = console.error; console.error = () => {};
+    new FriendlyErrorFilter().catch({ code: 'XX000', message: 'tenant/user x not found' }, host);
+    expect(status).toBe(503);
+    expect(body.message).toContain('DB');
+    new FriendlyErrorFilter().catch(new Error('boom'), host);
+    console.error = origErr;
+    expect(status).toBe(500);
+    expect(body.message).toContain('일시적인');
+  });
+});

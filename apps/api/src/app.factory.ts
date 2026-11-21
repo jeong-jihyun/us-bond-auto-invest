@@ -3,11 +3,13 @@ import { INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { assertConfig, config } from './config';
+import { FriendlyErrorFilter } from './errors';
 
 export async function createApp(): Promise<INestApplication> {
   assertConfig();
   const app = await NestFactory.create(AppModule, { logger: ['error', 'warn'] });
   app.setGlobalPrefix('api/v1');
+  app.useGlobalFilters(new FriendlyErrorFilter());
   app.enableCors({
     origin: (origin: string | undefined, cb: (e: Error | null, ok?: boolean) => void) => {
       // 앱(네이티브)은 Origin이 없다. 웹은 허용 목록 + 로컬 개발 주소만

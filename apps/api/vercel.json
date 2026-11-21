@@ -1,5 +1,6 @@
 {
   "framework": null,
   "installCommand": "cd ../.. && npm ci",
-  "buildCommand": "node scripts/build.mjs"
+  "buildCommand": "node scripts/build.mjs",
+  "crons": [{ "path": "/api/v1/jobs/monthly-plan-scan", "schedule": "0 22 * * *" }]
 }

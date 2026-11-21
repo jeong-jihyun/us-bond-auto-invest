@@ -97,7 +97,16 @@ async function api(path: string, opts: { method?: string; body?: unknown; token?
   }
   if (!res.ok) {
     const msg = Array.isArray(json.message) ? json.message[0] : json.message;
-    throw new ApiError(msg ?? `오류 (${res.status})`, res.status);
+    // 서버가 준 한국어 문구는 그대로, 영어 기본 문구(Internal server error 등)는 쉬운 말로 바꾼다
+    const korean = msg && !/^[\x00-\x7F]*$/.test(String(msg));
+    const text = korean
+      ? String(msg)
+      : res.status === 503
+        ? '서버 저장소(DB)에 잠시 연결할 수 없습니다. 잠시 후 다시 시도하세요'
+        : res.status >= 500
+          ? '서버에 일시적인 문제가 생겼습니다. 잠시 후 다시 시도하세요'
+          : `요청을 처리하지 못했습니다 (${res.status})`;
+    throw new ApiError(text, res.status);
   }
   return json;
 }
