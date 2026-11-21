@@ -13,7 +13,6 @@ writeFileSync(`${fn}.vc-config.json`, JSON.stringify({
 writeFileSync(`${out}config.json`, JSON.stringify({
   version: 3,
   routes: [{ src: '/(.*)', dest: '/api' }],
-  // 매일 07:00 KST (22:00 UTC). Hobby 플랜은 하루 1회까지 무료
-  crons: [{ path: '/api/v1/jobs/monthly-plan-scan', schedule: '0 22 * * *' }],
+  // 매일 07:00 KST Cron은 apps/api/vercel.json 에만 둔다 (두 곳에 두면 duplicated_cron_job 오류)
 }, null, 2));
 console.log('built', out);

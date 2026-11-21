@@ -313,6 +313,12 @@ export class JobsController {
   @Get('monthly-plan-scan')
   async scan(@Req() req: any) {
     if (!config.cronSecret || req.headers['authorization'] !== `Bearer ${config.cronSecret}`) {
+      // 원인을 나중에 볼 수 있게 거부된 호출도 기록한다 (비밀값은 남기지 않음)
+      await db().unsafe(
+        `INSERT INTO bond.job_runs (job_name, run_date, finished_at, errors, detail) VALUES ('monthly-plan-scan', $1::date, NOW(), 1, $2::text::jsonb)`,
+        [todayKST(), JSON.stringify({ rejected: 'unauthorized', hasAuthHeader: !!req.headers['authorization'], secretConfigured: !!config.cronSecret,
+          userAgent: String(req.headers['user-agent'] ?? '').slice(0, 80) })],
+      ).catch(() => undefined);
       throw new UnauthorizedException('cron only');
     }
     return monthlyPlanScan();

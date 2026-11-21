@@ -5,7 +5,10 @@ import { db } from './db';
 import { withUser } from './state.repo';
 
 export async function monthlyPlanScan(today = todayKST()) {
-  if (!config.autoInvestEnabled) return { skipped: true, reason: 'AUTO_INVEST_ENABLED=false' };
+  if (!config.autoInvestEnabled) {
+    await db().unsafe(`INSERT INTO bond.job_runs (job_name, run_date, finished_at, detail) VALUES ('monthly-plan-scan', $1::date, NOW(), '{"skipped":"AUTO_INVEST_ENABLED=false"}'::jsonb)`, [today]);
+    return { skipped: true, reason: 'AUTO_INVEST_ENABLED=false' };
+  }
   const [run] = await db().unsafe(`INSERT INTO bond.job_runs (job_name, run_date) VALUES ('monthly-plan-scan', $1::date) RETURNING id`, [today]);
   // 모의 시간을 쓰는 사용자(sim_date 있음)는 자기 시계로만 움직이므로 실제 스케줄러 대상에서 뺀다
   const users = await db().unsafe(
